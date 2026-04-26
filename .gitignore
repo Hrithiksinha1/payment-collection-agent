@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.cursor/
+tests/validation_case_log.txt
