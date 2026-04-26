@@ -28,7 +28,7 @@ TERMINATED          = "TERMINATED"         # conversation over
 STATE_FIELDS = {
     GREETING:           ["account_id"],
     ACCOUNT_LOOKUP:     ["name"],
-    VERIFICATION:       ["dob", "aadhaar", "pincode"],
+    VERIFICATION:       ["dob", "aadhaar", "pincode", "name"],
     PAYMENT_COLLECTION: ["amount", "card_number", "cvv",
                          "expiry_month", "expiry_year", "cardholder_name"],
     OUTCOME:            [],
@@ -97,6 +97,12 @@ class Agent:
         Transitions only happen when ALL required data is present and valid.
         """
 
+        # ── OUTCOME: outcome was shown last turn — now terminate ──
+        # The LLM had one full turn to display the result; close the session.
+        if ctx.state == OUTCOME:
+            ctx.state = TERMINATED
+            return
+
         # ── GREETING: wait for account ID, then look it up ──────
         if ctx.state == GREETING:
             account_id = ctx.collected.get("account_id")
@@ -136,7 +142,8 @@ class Agent:
             pincode = ctx.collected.get("pincode")
 
             if not name:
-                # Shouldn't happen (came from ACCOUNT_LOOKUP) but guard anyway
+                # name is missing — happens after a failed verification clears it.
+                # Extractor will pick it up next turn ("name" is in STATE_FIELDS[VERIFICATION]).
                 return
 
             if not (dob or aadhaar or pincode):
@@ -293,7 +300,15 @@ Rules:
 Example output:
 {{"account_id": null, "name": "Nithin Jain", "dob": "1990-05-14"}}"""
 
-        messages = [{"role": "user", "content": user_input}]
+        # Prepend the last assistant message so the extractor has conversational
+        # context — e.g. knowing "we asked for Aadhaar" helps classify bare "4321"
+        context_messages = []
+        for msg in reversed(self.ctx.conversation[:-1]):  # skip current user msg
+            if msg["role"] == "assistant":
+                context_messages = [{"role": "assistant", "content": msg["content"]}]
+                break
+
+        messages = context_messages + [{"role": "user", "content": user_input}]
 
         try:
             raw = call_llm(system, messages)

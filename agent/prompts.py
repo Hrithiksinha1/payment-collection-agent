@@ -18,10 +18,13 @@ STRICT RULES:
 - NEVER validate identity yourself.
 - NEVER fabricate data.
 
-CONTEXT RULE:
-- Already collected data: {context.collected}
+SOURCE OF TRUTH:
+- Confirmed collected data: {context.collected}
 - Latest backend note: {context.last_error}
-- DO NOT ask again for any information already present in collected data.
+- CRITICAL: ONLY trust the 'collected' dict above — do NOT infer or assume data from the raw conversation.
+- If a field is NOT in 'collected', treat it as not yet provided, even if the user mentioned something in the chat.
+- If the user gave something that is NOT in 'collected', it was invalid/unrecognised — politely ask them to provide it again.
+- DO NOT say "processing", "thank you for providing", or imply progress for data that is not confirmed in 'collected'.
 
 TONE:
 - Professional, concise, polite.
@@ -33,16 +36,20 @@ TONE:
         return base_rules + """
 STATE: GREETING
 
-GOAL:
-- Greet the user.
-- Ask ONLY for account ID.
+ACCOUNT ID STATUS: No valid account ID has been collected yet.
 
-RULES:
-- Do NOT ask anything else.
+YOUR ONLY TASK:
+- Ask the user to provide their account ID.
+- A valid account ID must match the format ACCXXXX where XXXX is digits (e.g. ACC1001, ACC1002).
+- If the user typed something that is NOT in the collected dict, it was not recognised as valid. Tell them clearly and ask again.
+
+STRICT RULES:
+- Do NOT say "thank you", "processing", or imply the account ID was received unless it is in collected above.
+- Do NOT ask for anything other than the account ID.
 - Do NOT mention verification or payment.
 
 OUTPUT:
-A short greeting + request for account ID.
+Ask the user to provide a valid account ID in the format ACCXXXX.
 """
 
     # ---------------- ACCOUNT LOOKUP ----------------
@@ -64,29 +71,43 @@ Politely ask for full name for verification.
 
     # ---------------- VERIFICATION ----------------
     elif state == "VERIFICATION":
-        return base_rules + """
+        if context.retry_count > 0:
+            verification_status = (
+                f"FAILED (attempt {context.retry_count}/3): "
+                "The previously provided details did not match our records. "
+                "The user must provide their full name and one secondary factor again."
+            )
+        else:
+            verification_status = "PENDING: Awaiting identity details from user."
+
+        name = context.collected.get("name")
+        has_secondary = any(
+            context.collected.get(k) for k in ["dob", "aadhaar", "pincode"]
+        )
+        missing = []
+        if not name:          missing.append("full name")
+        if not has_secondary: missing.append("date of birth / Aadhaar last 4 digits / pincode")
+        missing_text = ", ".join(missing) if missing else "all details received — awaiting system check"
+
+        return base_rules + f"""
 STATE: VERIFICATION
 
+VERIFICATION STATUS: {verification_status}
+STILL NEEDED FROM USER: {missing_text}
+
 GOAL:
-- Collect:
-  1. Full name (if not already collected)
-  2. One of:
-     - Date of Birth (YYYY-MM-DD)
-     - Aadhaar last 4 digits
-     - Pincode
+- If verification FAILED → clearly tell the user their details did not match and ask them to try again.
+- If PENDING → collect: (1) full name, then (2) one of: DOB (YYYY-MM-DD), Aadhaar last 4 digits, or Pincode.
 
-CRITICAL RULES:
-- NEVER reveal stored account data.
-- NEVER confirm if user input matches backend data.
-- NEVER say "correct" or "incorrect".
-- ALWAYS say verification result will be handled by system logic.
-
-GUIDANCE:
-- If partial info is given → ask for missing pieces.
-- If user provides multiple options → accept naturally.
+RULES:
+- NEVER reveal stored account data (DOB, Aadhaar, etc.).
+- If verification FAILED, do NOT say "system will handle it" — communicate the failure clearly and ask the user to re-enter.
+- Do NOT say the user is verified until PAYMENT_COLLECTION state is reached.
+- Ask ONLY for what is listed in STILL NEEDED above.
 
 OUTPUT:
-Guide user to provide required identity details.
+If verification failed: apologise, state the details didn't match, and ask user to provide name and secondary factor again.
+If pending: guide user to provide the missing details listed above.
 """
 
     # ---------------- PAYMENT COLLECTION ----------------
@@ -100,53 +121,68 @@ Guide user to provide required identity details.
             "expiry_year",
             "cardholder_name",
         ]
-        missing_fields = [field for field in required_fields if field not in context.collected]
-        missing_fields_text = ", ".join(missing_fields) if missing_fields else "none"
+        missing_fields  = [f for f in required_fields if f not in context.collected]
+        confirmed_fields = [f for f in required_fields if f in context.collected]
+        missing_text    = ", ".join(missing_fields)  if missing_fields  else "none — all collected"
+        confirmed_text  = ", ".join(confirmed_fields) if confirmed_fields else "none yet"
+
+        if missing_fields:
+            output_rule = (
+                f"Ask the user ONLY for these missing fields: {missing_text}.\n"
+                "Do NOT say 'complete', 'processing', 'thank you for all details', or anything that implies payment is ready.\n"
+                "Do NOT reference fields that are already confirmed — only ask for what is missing."
+            )
+        else:
+            output_rule = "All fields confirmed. Tell the user their details have been received and payment is being submitted."
 
         return base_rules + f"""
 STATE: PAYMENT_COLLECTION
 
-GOAL:
-- User is VERIFIED.
-- Outstanding balance: ₹{balance}
-- Missing required fields right now: {missing_fields_text}
+OUTSTANDING BALANCE: ₹{balance}
 
-STEPS:
-1. Ask how much user wants to pay
-2. Then collect card details:
-   - Card number
-   - CVV
-   - Expiry month
-   - Expiry year
-   - Cardholder name
+PAYMENT FIELD STATUS:
+  ✓ Confirmed collected : {confirmed_text}
+  ✗ Still missing       : {missing_text}
 
 RULES:
-- Do NOT validate card yourself.
+- Do NOT validate card details yourself.
 - Do NOT assume payment success.
-- Allow partial payments.
-- CRITICAL: If any required field is missing, ask ONLY for missing field(s).
-- CRITICAL: Never say payment is being processed unless ALL required fields are present.
-- CRITICAL: Never mention any inferred amount if amount is not explicitly present in collected data.
+- Allow partial payments (amount < balance is fine).
+- ONLY trust the confirmed/missing status above — do NOT infer field status from the conversation.
 
-OUTPUT:
-Guide user step-by-step for payment.
+OUTPUT RULE (MANDATORY):
+{output_rule}
 """
+
 
     # ---------------- OUTCOME ----------------
     elif state == "OUTCOME":
-        return base_rules + """
+        payment_result = context.payment_result or {}
+        success        = payment_result.get("success", False)
+        txn_id         = payment_result.get("transaction_id", "N/A")
+        failure_reason = payment_result.get("reason", context.last_error or "Unknown error")
+
+        if success:
+            outcome_details = f"""PAYMENT STATUS: SUCCESS
+Transaction ID : {txn_id}
+Action         : Confirm payment and share the transaction ID with the user."""
+        else:
+            outcome_details = f"""PAYMENT STATUS: FAILED
+Reason         : {failure_reason}
+Action         : Explain the failure clearly and advise the user on next steps."""
+
+        return base_rules + f"""
 STATE: OUTCOME
 
-GOAL:
-- Communicate result clearly.
+{outcome_details}
 
 RULES:
-- If success → include transaction ID and confirmation
-- If failure → clearly explain issue and next step
-- Be concise and clear
+- Do NOT ask for any more information.
+- Do NOT say "please hold on" or imply processing is still happening.
+- Be concise, professional, and final.
 
 OUTPUT:
-Clear success or failure message.
+Clear success or failure message including the transaction ID (if successful).
 """
 
     # ---------------- TERMINATED ----------------
