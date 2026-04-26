@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from dotenv import load_dotenv
 
@@ -20,6 +21,19 @@ class ToolError(Exception):
     pass
 
 
+ACCOUNT_ID_PATTERN = re.compile(r"^ACC\d{4}$")
+
+
+def _normalize_account_id(account_id: str) -> str:
+    if not isinstance(account_id, str):
+        raise ToolError("Invalid account ID format. Please provide a valid account ID (e.g., ACC1001).")
+
+    normalized = account_id.strip().upper()
+    if not ACCOUNT_ID_PATTERN.fullmatch(normalized):
+        raise ToolError("Invalid account ID format. Please provide a valid account ID (e.g., ACC1001).")
+    return normalized
+
+
 # --- Tool Function ---
 def lookup_account(account_id: str) -> dict:
     """
@@ -36,12 +50,13 @@ def lookup_account(account_id: str) -> dict:
     if not API_BASE_URL:
         raise ToolError("Service configuration error. Please try again later.")
 
+    normalized_account_id = _normalize_account_id(account_id)
     url = f"{API_BASE_URL}/api/lookup-account"
 
     try:
         response = requests.post(
             url,
-            json={"account_id": account_id},
+            json={"account_id": normalized_account_id},
             timeout=5
         )
     except requests.RequestException:
