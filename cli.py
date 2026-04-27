@@ -46,6 +46,10 @@ def main():
             # Print current state in dim text
             print(f"{DIM}[STATE: {agent.ctx.state}]{RESET}\n")
 
+            if agent.ctx.state == "TERMINATED":
+                print("Session terminated. Goodbye!\n")
+                break
+
     except KeyboardInterrupt:
         print("\n\nInterrupted. Goodbye!\n")
 

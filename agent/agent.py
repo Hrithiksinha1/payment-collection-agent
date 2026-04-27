@@ -20,6 +20,7 @@ ACCOUNT_LOOKUP      = "ACCOUNT_LOOKUP"     # account found, waiting for full nam
 VERIFICATION        = "VERIFICATION"       # waiting for secondary factor
 PAYMENT_COLLECTION  = "PAYMENT_COLLECTION" # collecting amount + card details
 OUTCOME             = "OUTCOME"            # payment processed, show result
+RECAP               = "RECAP"
 TERMINATED          = "TERMINATED"         # conversation over
 
 
@@ -32,6 +33,7 @@ STATE_FIELDS = {
     PAYMENT_COLLECTION: ["amount", "card_number", "cvv",
                          "expiry_month", "expiry_year", "cardholder_name"],
     OUTCOME:            [],
+    RECAP:              [],
     TERMINATED:         [],
 }
 
@@ -99,8 +101,15 @@ class Agent:
 
         # ── OUTCOME: outcome was shown last turn — now terminate ──
         # The LLM had one full turn to display the result; close the session.
-        if ctx.state == OUTCOME:
+        if ctx.state == TERMINATED:
+            return
+
+        if ctx.state == RECAP:
             ctx.state = TERMINATED
+            return
+
+        if ctx.state == OUTCOME:
+            ctx.state = RECAP
             return
 
         # ── GREETING: wait for account ID, then look it up ──────
@@ -175,7 +184,7 @@ class Agent:
                     ctx.collected.pop(key, None)
 
                 if ctx.retry_count >= 3:
-                    ctx.state = TERMINATED
+                    ctx.state = RECAP
 
         # ── PAYMENT COLLECTION: validate then charge ─────────────
         if ctx.state == PAYMENT_COLLECTION:

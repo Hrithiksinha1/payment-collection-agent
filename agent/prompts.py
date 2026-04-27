@@ -154,7 +154,6 @@ OUTPUT RULE (MANDATORY):
 {output_rule}
 """
 
-
     # ---------------- OUTCOME ----------------
     elif state == "OUTCOME":
         payment_result = context.payment_result or {}
@@ -183,6 +182,34 @@ RULES:
 
 OUTPUT:
 Clear success or failure message including the transaction ID (if successful).
+"""
+
+    # ---------------- RECAP ----------------
+    elif state == "RECAP":
+        payment_result = context.payment_result or {}
+        success        = payment_result.get("success", False)
+        txn_id         = payment_result.get("transaction_id", "N/A")
+        amount         = context.collected.get("amount", "N/A")
+        account_id     = context.collected.get("account_id", "N/A")
+
+        recap_text = f"Summary: Payment of Rs {amount} for account {account_id} "
+        if success:
+            recap_text += f"was successful (TXN: {txn_id})."
+        else:
+            recap_text += f"failed due to {context.last_error or 'payment decline'}."
+
+        return base_rules + f"""
+STATE: RECAP
+
+{recap_text}
+
+GOAL:
+- Provide a clear final summary of what happened in the session.
+- Briefly recap the account ID and amount paid.
+- Close the conversation gracefully.
+
+OUTPUT:
+Summarize the transaction briefly and say goodbye.
 """
 
     # ---------------- TERMINATED ----------------

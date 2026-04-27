@@ -25,5 +25,5 @@ def test_payment_collection_prompt_lists_missing_amount():
 
     prompt = build_system_prompt("PAYMENT_COLLECTION", context)
 
-    assert "Missing required fields right now: amount" in prompt
-    assert "Never say payment is being processed unless ALL required fields are present." in prompt
+    assert "Ask the user ONLY for these missing fields: amount" in prompt
+    assert "Do NOT say 'complete', 'processing', 'thank you for all details'" in prompt

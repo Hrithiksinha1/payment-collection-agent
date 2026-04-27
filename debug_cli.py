@@ -127,6 +127,10 @@ def main() -> None:
             print(_safe_console_text(result["message"]))
             print(f"{DIM}[STATE: {agent.ctx.state}]{RESET}\n")
 
+            if agent.ctx.state == agent_module.TERMINATED:
+                print(f"{TRACE} Session reached TERMINATED state. Closing debug CLI.\n")
+                break
+
     except KeyboardInterrupt:
         print("\n\nInterrupted. Goodbye!\n")
 
